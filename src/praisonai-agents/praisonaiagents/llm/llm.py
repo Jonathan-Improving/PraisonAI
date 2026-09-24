@@ -8,7 +8,6 @@ import re
 import inspect
 import asyncio
 import threading
-import contextvars
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union, Literal, Callable, TYPE_CHECKING, Protocol
 
@@ -599,13 +598,14 @@ Respond with ONLY a valid JSON tool call in this format:
         # Token tracking
         self.last_token_metrics: Optional[TokenMetrics] = None
         self.session_token_metrics: Optional[TokenMetrics] = None
-        # Agent attribution is task-local: a single LLM instance is shared by
-        # concurrent agents (gateway channels, asyncio.gather), so a plain
-        # attribute would let one agent's set_current_agent() overwrite another's
-        # while it is still awaiting its own completion, misattributing tokens
-        # (issue #5052). A ContextVar isolates the value per async task/context.
+        # Agent attribution for token accounting is stored in a ContextVar so it
+        # is *task/thread-local*, not shared instance state. A single LLM
+        # instance is routinely shared by many concurrently-running agents; a
+        # plain attribute would let one agent's ``set_current_agent`` clobber
+        # another's while the first is still awaiting its own completion,
+        # mis-attributing tokens across tenants (issue #5052).
         self._current_agent_name_var: contextvars.ContextVar[Optional[str]] = (
-            contextvars.ContextVar("current_agent_name", default=None)
+            contextvars.ContextVar("praisonai_current_agent_name", default=None)
         )
         self._current_agent_id_var: contextvars.ContextVar[Optional[str]] = (
             contextvars.ContextVar("current_agent_id", default=None)
