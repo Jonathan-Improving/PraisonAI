@@ -599,13 +599,14 @@ Respond with ONLY a valid JSON tool call in this format:
         # Token tracking
         self.last_token_metrics: Optional[TokenMetrics] = None
         self.session_token_metrics: Optional[TokenMetrics] = None
-        # Agent attribution is task-local: a single LLM instance is shared by
-        # concurrent agents (gateway channels, asyncio.gather), so a plain
-        # attribute would let one agent's set_current_agent() overwrite another's
-        # while it is still awaiting its own completion, misattributing tokens
-        # (issue #5052). A ContextVar isolates the value per async task/context.
+        # Agent attribution is task-local: a single LLM instance may be shared
+        # across concurrently running agents (gateway channels, asyncio.gather),
+        # so the "current" agent name must not leak between their asyncio tasks
+        # (issue #5052). A ContextVar keeps each task's value isolated; the
+        # ``current_agent_name`` property below preserves the historical
+        # attribute-style read/write API.
         self._current_agent_name_var: contextvars.ContextVar[Optional[str]] = (
-            contextvars.ContextVar("current_agent_name", default=None)
+            contextvars.ContextVar("praison_llm_current_agent_name", default=None)
         )
         self._current_agent_id_var: contextvars.ContextVar[Optional[str]] = (
             contextvars.ContextVar("current_agent_id", default=None)
@@ -6678,27 +6679,27 @@ Output MUST be JSON with 'reflection' and 'satisfactory'.
         Thread locks on LLM subclasses get fresh locks (issue #1746 / #5052).
         """
         cls = self.__class__
-        new = cls.__new__(cls)
-        memo[id(self)] = new
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
         for key, value in self.__dict__.items():
             if key == "_current_agent_name_var":
-                new.__dict__[key] = contextvars.ContextVar(
-                    "current_agent_name", default=None
+                clone.__dict__[key] = contextvars.ContextVar(
+                    "praison_llm_current_agent_name", default=None
                 )
                 continue
             if key == "_current_agent_id_var":
-                new.__dict__[key] = contextvars.ContextVar(
+                clone.__dict__[key] = contextvars.ContextVar(
                     "current_agent_id", default=None
                 )
                 continue
             if type(value) is type(threading.RLock()):
-                new.__dict__[key] = threading.RLock()
+                clone.__dict__[key] = threading.RLock()
                 continue
             if type(value) is type(threading.Lock()):
-                new.__dict__[key] = threading.Lock()
+                clone.__dict__[key] = threading.Lock()
                 continue
-            new.__dict__[key] = copy.deepcopy(value, memo)
-        return new
+            clone.__dict__[key] = copy.deepcopy(value, memo)
+        return clone
 
     def _resolve_openai_compatible_model(self) -> str:
         """Route a bare model name through the OpenAI-compatible client.
