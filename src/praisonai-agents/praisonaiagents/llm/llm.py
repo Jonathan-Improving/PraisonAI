@@ -8,7 +8,6 @@ import re
 import inspect
 import asyncio
 import threading
-import contextvars
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union, Literal, Callable, TYPE_CHECKING, Protocol
 
@@ -6675,30 +6674,32 @@ Output MUST be JSON with 'reflection' and 'satisfactory'.
         ``contextvars.ContextVar`` has no ``__deepcopy__``/``__reduce__`` and is
         not copyable, so ``Agent.__deepcopy__`` (which recursively copies
         ``_llm_instance``) would raise ``TypeError: cannot pickle ContextVar``.
+        The clone gets its own ContextVars because attribution is runtime/
+        task-local and must stay independent between original and clone (#5052).
         Thread locks on LLM subclasses get fresh locks (issue #1746 / #5052).
         """
         cls = self.__class__
-        new = cls.__new__(cls)
-        memo[id(self)] = new
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
         for key, value in self.__dict__.items():
             if key == "_current_agent_name_var":
-                new.__dict__[key] = contextvars.ContextVar(
+                clone.__dict__[key] = contextvars.ContextVar(
                     "current_agent_name", default=None
                 )
                 continue
             if key == "_current_agent_id_var":
-                new.__dict__[key] = contextvars.ContextVar(
+                clone.__dict__[key] = contextvars.ContextVar(
                     "current_agent_id", default=None
                 )
                 continue
             if type(value) is type(threading.RLock()):
-                new.__dict__[key] = threading.RLock()
+                clone.__dict__[key] = threading.RLock()
                 continue
             if type(value) is type(threading.Lock()):
-                new.__dict__[key] = threading.Lock()
+                clone.__dict__[key] = threading.Lock()
                 continue
-            new.__dict__[key] = copy.deepcopy(value, memo)
-        return new
+            clone.__dict__[key] = copy.deepcopy(value, memo)
+        return clone
 
     def _resolve_openai_compatible_model(self) -> str:
         """Route a bare model name through the OpenAI-compatible client.
